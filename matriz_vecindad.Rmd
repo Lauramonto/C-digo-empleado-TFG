@@ -1,0 +1,89 @@
+---
+title: "Untitled"
+output: html_document
+date: "2024-11-26"
+---
+Librerías
+```{r}
+library(DRHotNet)
+```
+
+```{r setup, include=FALSE}
+W = NeighbourhoodMatrixNetwork(X$domain)
+W$weights
+W$neighbours
+```
+
+Crear matriz de vecindad
+
+```{r}
+
+nodes <- data.frame(
+  x = c(X$domain$lines$ends[, "x0"], X$domain$lines$ends[, "x1"]),
+  y = c(X$domain$lines$ends[, "y0"], X$domain$lines$ends[, "y1"])
+)
+
+# Número total de segmentos
+n <- nrow(X$domain$lines$ends)  
+
+# Inicializar la matriz de adyacencia con ceros
+W <- matrix(0, nrow = n, ncol = n)
+
+# Función para verificar si dos segmentos comparten un extremo
+comparten_extremo <- function(seg1, seg2) {
+  return((seg1$x1 == seg2$x0 && seg1$y1 == seg2$y0) || 
+         (seg1$x1 == seg2$x1 && seg1$y1 == seg2$y1) ||
+         (seg1$x0 == seg2$x0 && seg1$y0 == seg2$y0) || 
+         (seg1$x0 == seg2$x1 && seg1$y0 == seg2$y1))
+}
+
+# Llenar la matriz de adyacencia
+for (i in 1:(n - 1)) {
+  for (j in (i + 1):n) {
+    # Acceder a las coordenadas de los extremos para los segmentos i y j
+    seg1 <- list(x0 = X$domain$lines$ends[i, "x0"], 
+                 y0 = X$domain$lines$ends[i, "y0"], 
+                 x1 = X$domain$lines$ends[i, "x1"], 
+                 y1 = X$domain$lines$ends[i, "y1"])
+    
+    seg2 <- list(x0 = X$domain$lines$ends[j, "x0"], 
+                 y0 = X$domain$lines$ends[j, "y0"], 
+                 x1 = X$domain$lines$ends[j, "x1"], 
+                 y1 = X$domain$lines$ends[j, "y1"])
+    
+    # Verificar si comparten un extremo
+    if (comparten_extremo(seg1, seg2)) {
+      W[i, j] <- 1
+      W[j, i] <- 1
+    }
+  }
+}
+
+# Ver la matriz de adyacencia 
+View(W)
+save(W, file = "NeighbourhoodMatrix.rda")
+```
+
+Comprobar que está bien la matriz de vecindad
+
+```{r}
+segment_1 <- X$domain$lines$ends[2, ] 
+segment_2 <- X$domain$lines$ends[2075, ]  
+
+# Graficar toda la red vial
+plot(NULL, xlim = range(X$domain$vertices$x), ylim = range(X$domain$vertices$y),
+     xlab = "Coordenada X", ylab = "Coordenada Y", main = "Red Vial con Segmentos 1 y 2")
+
+# Dibujar todos los segmentos de la red vial
+for (i in 1:nrow(X$domain$lines$ends)) {
+  lines(c(X$domain$lines$ends[i, "x0"], X$domain$lines$ends[i, "x1"]),
+        c(X$domain$lines$ends[i, "y0"], X$domain$lines$ends[i, "y1"]),
+        col = "gray", lwd = 0.5)
+}
+
+# Dibujar los segmentos 1 y 2 en colores diferentes
+lines(c(segment_1$x0, segment_1$x1), c(segment_1$y0, segment_1$y1), col = "blue", lwd = 2)
+lines(c(segment_2$x0, segment_2$x1), c(segment_2$y0, segment_2$y1), col = "red", lwd = 2)
+
+```
+

@@ -1,0 +1,604 @@
+---
+title: "Mapas"
+output: html_document
+date: "2024-10-14"
+---
+
+```{r, warning=FALSE}
+library(ggplot2)
+library(ggspatial)
+library(tibble)
+library(dplyr)
+library(sf)
+library(spatstat)
+library(ggmap)
+library(osmdata)
+library(viridis)
+library(stringr)
+
+```
+
+Convertir X$domain a psp y a data frame
+
+```{r}
+lines_psp <- as.psp(X$domain)
+lines_df <- as.data.frame(lines_psp)
+```
+
+Seleccionar la probabilidad de cada tipo de accidente para cada segmento
+
+```{r}
+#f <- as.data.frame(mcmc.output$summary) 
+df <- as.data.frame(mcmc.output[["summary"]][["chain1"]]) 
+df <- rownames_to_column(df, var = "segment") 
+df_pi <- df %>% filter(grepl("^pi", segment)) %>% select("segment", "Mean")
+
+pi_1 = df_pi %>% filter (grepl("^pi\\[.*, 1\\]", segment)) %>% mutate(segment = 1:n()) #ALCANCE
+pi_2 = df_pi %>% filter (grepl("^pi\\[.*, 2\\]", segment)) %>% mutate(segment = 1:n()) #ATROPELLO
+pi_3 = df_pi %>% filter (grepl("^pi\\[.*, 3\\]", segment)) %>% mutate(segment = 1:n()) #CHOQUE
+pi_4 = df_pi %>% filter (grepl("^pi\\[.*, 4\\]", segment)) %>% mutate(segment = 1:n()) #EMBESTIDA
+pi_5 = df_pi %>% filter (grepl("^pi\\[.*, 5\\]", segment)) %>% mutate(segment = 1:n()) #RASCADA
+pi_6 = df_pi %>% filter (grepl("^pi\\[.*, 6\\]", segment)) %>% mutate(segment = 1:n()) #SALIDA DE LA VIA
+
+head(pi_1)
+```
+
+Crear el data frame con todas las probabilidades para los tipos de accidente en cada segmento
+
+```{r}
+lines_df <- lines_df %>%
+  mutate(segment = row_number()) %>% 
+  left_join(pi_1, by = "segment") %>%
+  left_join(pi_2, by = "segment") %>%
+  left_join(pi_3, by = "segment") %>%
+  left_join(pi_4, by = "segment") %>%
+  left_join(pi_5, by = "segment") %>%
+  left_join(pi_6, by = "segment") %>%
+  rename(Mean1 = Mean.x,
+         Mean2 = Mean.y,
+         Mean3 = Mean.x.x,
+         Mean4 = Mean.y.y,
+         Mean5 = Mean.x.x.x,
+         Mean6 = Mean.y.y.y)
+
+```
+
+```{r}
+lines_df %>%group_by(segment)%>% summarise(suma = sum(Mean1, Mean2, Mean3, Mean4, Mean5, Mean6))%>%head()
+```
+
+```{r}
+
+# Definir los vértices del área de Valencia que queremos observar 
+bbox_valencia <- st_sfc(st_polygon(list(rbind(
+  c(723447.4, 4370566),
+  c(727762.5, 4370566),
+  c(727762.5, 4374681),
+  c(723447.4, 4374681),
+  c(723447.4, 4370566)
+))), crs = 25830) %>% #sist. coordenadas español
+  st_transform(4326) %>% # sist. coordenadas común (EPSG 4326)
+  st_bbox()
+
+
+# Obtener el mapa de Valencia
+valencia_map <- opq(bbox = bbox_valencia) %>%
+  add_osm_feature(key = 'highway') %>% #solicitar carreteras y vías
+  osmdata_sf()
+```
+
+
+MAPAS
+
+1. Segmentos con mayor riesgo de cada tipo de accidente en Valencia
+
+1.1 Sin fondo
+```{r}
+
+mean_columns <- c("Mean1", "Mean2", "Mean3", "Mean4", "Mean5", "Mean6")
+accidente <- c("ALCANCE","ATROPELLO","CHOQUE","EMBESTIDA","RASCADA","SALIDA DE LA VIA")
+
+for (i in seq_along(mean_columns)) {
+  
+  mean_col <- mean_columns[i]
+  tipo_acc <- accidente[i]
+  
+  # umbral
+  umbral <- quantile(lines_df[[mean_col]], 0.9)  
+  df1 <- lines_df %>% mutate(color = ifelse(lines_df[[mean_col]] > umbral, "red", "grey")) 
+  
+  # mapa
+  p <- ggplot(df1) +
+    geom_segment(aes(x = x0, y = y0, xend = x1, yend = y1, color = color), size = 0.8) +
+    scale_color_identity() +  
+    labs(title = paste("Probabilidad alta", tipo_acc)) + 
+    theme_void() +
+    coord_fixed() 
+  
+  ggsave(
+    filename = paste0("mapa_probabilidad_alta_", tipo_acc, ".png"),
+    plot = p,
+    width = 7,
+    height = 6,
+    dpi = 300)
+  
+  print(p)  
+}
+
+```
+
+1.2 Con fondo
+```{r}
+mean_columns <- c("Mean1", "Mean2", "Mean3", "Mean4", "Mean5", "Mean6")
+accidente <- c("ALCANCE", "ATROPELLO", "CHOQUE", "EMBESTIDA", "RASCADA", "SALIDA DE LA VIA")
+
+for (i in seq_along(mean_columns)) {
+  mean_col <- mean_columns[i]
+  tipo_acc <- accidente[i]
+
+  umbral <- quantile(lines_df[[mean_col]], 0.9)  
+  df1 <- lines_df %>% mutate(color = ifelse(lines_df[[mean_col]] > umbral, "red", "grey60")) #lines_df + color
+
+  p <- ggplot(df1) +
+    geom_sf(data = valencia_map$osm_lines, color = "gray90", size = 0.3) +  #mapa extendido fondo
+    geom_segment(aes(x = x0, y = y0, xend = x1, yend = y1, color = color), size = 0.7) + #segmentos X$domain
+    coord_sf(xlim = c(723447.4, 727762.5), ylim = c(4370566, 4374681), crs = 25830) + 
+    scale_color_identity() +  
+    labs(title = paste("Probabilidad alta", tipo_acc)) + 
+    theme_void() 
+  
+  print(p)
+}
+```
+
+2. Tipo de accidente más probable en cada segmento
+
+2.1 Sin fondo
+```{r}
+#Crear una columna con el tipo de accidente más probable para cada segmento
+acc_maxprob <- lines_df %>%
+  mutate(tipo_accidente = case_when(
+    Mean1 == pmax(Mean1, Mean2, Mean3, Mean4, Mean5, Mean6) ~ "ALCANCE",
+    Mean2 == pmax(Mean1, Mean2, Mean3, Mean4, Mean5, Mean6) ~ "ATROPELLO",
+    Mean3 == pmax(Mean1, Mean2, Mean3, Mean4, Mean5, Mean6) ~ "CHOQUE",
+    Mean4 == pmax(Mean1, Mean2, Mean3, Mean4, Mean5, Mean6) ~ "EMBESTIDA",
+    Mean5 == pmax(Mean1, Mean2, Mean3, Mean4, Mean5, Mean6) ~ "RASCADA",
+    Mean6 == pmax(Mean1, Mean2, Mean3, Mean4, Mean5, Mean6) ~ "SALIDA DE LA VIA"
+  ))
+
+mean_columns <- c("Mean1", "Mean2", "Mean3", "Mean4", "Mean5", "Mean6")
+accidente <- c("ALCANCE", "ATROPELLO", "CHOQUE", "EMBESTIDA", "RASCADA", "SALIDA DE LA VIA")
+
+for (i in seq_along(mean_columns)) {
+  
+  mean_col <- mean_columns[i]
+  tipo_acc <- accidente[i]
+  
+  df2 <- acc_maxprob %>% mutate(color = ifelse(tipo_accidente == tipo_acc, "red", "grey"))
+  
+  # Mapa
+  p <-  ggplot(df2) +
+        geom_segment(aes(x = x0, y = y0, xend = x1, yend = y1, color = color), size = 0.8) +
+        scale_color_identity() +  
+        labs(title = paste("Mayor probabilidad de",tipo_acc)) + 
+        theme_void() +
+        coord_fixed() 
+
+  print(p)  
+}
+
+```
+
+2.2 Con fondo
+```{r}
+acc_maxprob <- lines_df %>%
+  mutate(max_prob = pmax(Mean1, Mean2, Mean3, Mean4, Mean5, Mean6, na.rm = TRUE),
+         tipo_accidente = case_when(
+           max_prob == Mean1 ~ "ALCANCE",
+           max_prob == Mean2 ~ "ATROPELLO",
+           max_prob == Mean3 ~ "CHOQUE",
+           max_prob == Mean4 ~ "EMBESTIDA",
+           max_prob == Mean5 ~ "RASCADA",
+           max_prob == Mean6 ~ "SALIDA DE LA VIA",
+           TRUE ~ "Desconocido"  # Por si acaso hay algún NA
+         ))
+
+p <- ggplot(acc_maxprob) +
+  geom_sf(data = valencia_map$osm_lines, color = "gray90", size = 0.3) +   #mapa extendido fondo
+  geom_segment(aes(x = x0, y = y0, xend = x1, yend = y1, color = tipo_accidente), size = 0.7) +  #segmentos X$domain 
+  scale_color_manual(values = c( "ALCANCE" = "#1f77b4",    # Azul
+                                 "ATROPELLO" = "yellow",  # Naranja
+                                 "CHOQUE" = "#2ca02c",     # Verde
+                                 "EMBESTIDA" = "red",  # Rojo
+                                 "RASCADA" = "black",     # Amarillo
+                                 "SALIDA VIA" = "#8c564b"),# Marrón
+                     name = "Tipo de accidente") +
+  coord_sf(xlim = c(723447.4, 727762.5), ylim = c(4370566, 4374681), crs = 25830) +    
+  annotation_north_arrow(location = "tl", which_north = "true") +
+  theme_minimal() +
+  theme_void()
+
+  ggsave(
+    filename = paste0("mapa_acc_mas_prob.png"),
+    plot = p,
+    width = 7,
+    height = 6,
+    dpi = 300)
+  
+```
+
+
+```{r}
+
+tipos_accidente <- c("ALCANCE", "ATROPELLO", "CHOQUE", "EMBESTIDA", "RASCADA", "SALIDA DE LA VIA")
+
+for (tipo in tipos_accidente) {
+  
+  acc_maxprob2 <- acc_maxprob %>% mutate(categoria_color = ifelse(tipo_accidente == tipo, "red", "grey60"))
+
+  p <- ggplot(acc_maxprob2) +
+    geom_sf(data = valencia_map$osm_lines, color = "gray90", size = 0.3) +      #mapa extendido fondo
+    geom_segment(aes(x = x0, y = y0, xend = x1, yend = y1, color = categoria_color), size = 0.9) +  #segmentos X$domain 
+    scale_color_identity(name = "Tipo de accidente") +                        
+    coord_sf(xlim = c(723447.4, 727762.5), ylim = c(4370566, 4374681), crs = 25830) +
+    theme_minimal() +
+    theme_void() +
+    theme(legend.position = "none")  
+  
+ # ggsave(
+  #  filename = paste0("mapa_seg_acc_mas_prob", tipo, ".png"),
+ #   plot = p,
+  #  width = 7,
+   # height = 6,
+  #  dpi = 300)
+
+  print(p)
+}
+
+```
+```{r}
+for (tipo in tipos_accidente) {
+  
+  acc_maxprob2 <- acc_maxprob %>%
+    mutate(es_tipo = tipo_accidente == tipo)
+
+  p <- ggplot() +
+    # fondo de mapa
+    geom_sf(data = valencia_map$osm_lines, color = "gray90", size = 0.3) +
+    
+    # segmentos en gris (no coinciden con el tipo actual)
+    geom_segment(
+      data = acc_maxprob2 %>% filter(!es_tipo),
+      aes(x = x0, y = y0, xend = x1, yend = y1),
+      color = "grey60",
+      size = 0.6
+    ) +
+    
+    # segmentos en rojo (sí coinciden con el tipo actual)
+    geom_segment(
+      data = acc_maxprob2 %>% filter(es_tipo),
+      aes(x = x0, y = y0, xend = x1, yend = y1),
+      color = "red",
+      size = 0.9
+    ) +
+    
+    coord_sf(xlim = c(723447.4, 727762.5), ylim = c(4370566, 4374681), crs = 25830) +
+    theme_void() +
+    theme(legend.position = "none")
+  
+  # Guardar si lo deseas
+  # ggsave(filename = paste0("mapa_seg_acc_mas_prob_", tipo, ".png"), plot = p, width = 7, height = 6, dpi = 300)
+  
+  print(p)
+}
+
+```
+
+
+3. Probabilidad de Accidentes en la Red Vial de Valencia por Tipo de Accidente en Escala Continua
+
+3.1 Con fondo
+```{r}
+
+tipos_accidente <- c("ALCANCE", "ATROPELLO", "CHOQUE", "EMBESTIDA", "RASCADA", "SALIDA VIA")
+mean_columns <- c("Mean1", "Mean2", "Mean3", "Mean4", "Mean5", "Mean6")
+
+for (i in seq_along(mean_columns)) {
+  
+  mean_col <- mean_columns[i]
+  tipo_accidente <- tipos_accidente[i]
+  
+  min_prob <- min(lines_df[[mean_col]], na.rm = TRUE)
+  max_prob <- max(lines_df[[mean_col]], na.rm = TRUE)
+  
+  p <- ggplot(lines_df) +
+    #geom_sf(data = valencia_map$osm_lines, color = "gray90", size = 0.3) + 
+    geom_segment(aes(x = x0, y = y0, xend = x1, yend = y1, color = !!sym(mean_col)), size = 0.8) +
+    scale_color_viridis_c(name = "Probabilidad", option = "C", limits = c(min_prob, max_prob)) +  
+    coord_sf(xlim = c(723447.4, 727762.5), ylim = c(4370566, 4374681), crs = 25830) +
+    #annotation_north_arrow(location = "tl", which_north = "true") +
+    labs(color = "Probabilidad") +
+    theme_minimal() +
+    theme_void() +
+    theme(legend.position = "right")
+  
+  print(p)
+}
+
+```
+```{r}
+library(ggplot2)
+library(viridis)
+
+tipos_accidente <- c("ALCANCE", "ATROPELLO", "CHOQUE", "EMBESTIDA", "RASCADA", "SALIDA VIA")
+mean_columns <- c("Mean1", "Mean2", "Mean3", "Mean4", "Mean5", "Mean6")
+
+for (i in seq_along(mean_columns)) {
+  
+  mean_col <- mean_columns[i]
+  tipo_accidente <- tipos_accidente[i]
+  
+  min_prob <- min(lines_df[[mean_col]], na.rm = TRUE)
+  max_prob <- max(lines_df[[mean_col]], na.rm = TRUE)
+  
+  p <- ggplot(lines_df) +
+    geom_segment(aes(x = x0, y = y0, xend = x1, yend = y1, color = !!sym(mean_col)), size = 0.8) +
+    scale_color_viridis_c(name = "Probabilidad", option = "H", limits = c(min_prob, max_prob)) +
+    coord_sf(xlim = c(723447.4, 727762.5), ylim = c(4370566, 4374681), crs = 25830) +
+    labs(title = paste("Probabilidad estimada -", tipo_accidente),
+         color = "Probabilidad") +
+    theme_void() +
+    theme(legend.position = "right")
+   ggsave(
+   filename = paste0("mapa3", tipo_accidente, ".png"),
+   plot = p,
+   width = 7,
+   height = 6,
+   dpi = 300)
+  print(p)
+}
+
+```
+
+
+
+
+4. Segmentos con Efectos Espaciales Significativos con un 90%, 95% y 99% de Confianza
+
+Confianza del 90%, 95% y 99% 
+```{r}
+#95% 
+
+#Vemos que efectos aleatorios son significativos
+mcmc_df95 <- rownames_to_column(as.data.frame(mcmc.output[["summary"]][["chain1"]]), var = "var") 
+df_u95 <- mcmc_df95 %>% filter(grepl("^u", var)) %>% select(1,5,6) %>% filter((.[[2]] > 0 ) | .[[3]] < 0) #2657
+
+# de estos 2657 cuantos son del tipo 6?
+
+df_u95 <- df_u95 %>%  mutate(segment = as.numeric(str_extract(var, "(?<=\\[)\\d+"))) #segmento
+df_u95 <- df_u95 %>%  mutate(tipo_acc = as.numeric(stringr::str_extract(var, "(?<=, )\\d+"))) #tipo accidente
+lines_df95 <- lines_df %>% left_join(df_u95, by = "segment")
+
+sum(lines_df95$tipo_acc == 6, na.rm = TRUE) #2405/2657 distintos del tipo 6
+
+```
+
+Hacemos lo mismo pero indicamos aquellos que sean positivos o negativos con un 90% de confianza
+```{r}
+#90%
+
+# Calcualar el intervalo de confianza del 90%
+interval_90 <- apply(mcmc.output[["samples"]][["chain1"]], 2, function(x) quantile(x, probs = c(0.05, 0.95)))
+interval_90_df <- as.data.frame(t(interval_90))
+colnames(interval_90_df) <- c("90%CI_low", "90%CI_upp")
+
+# Efectos aleatorios significativos
+mcmc_90 <- rownames_to_column(interval_90_df, var = "var") 
+df_u90 <- mcmc_90 %>% filter(grepl("^u", var)) %>% filter((.[[2]] > 0 ) | .[[3]] < 0)
+# Indicamos a que segmentos corresponden
+df_u90 <- df_u90 %>%  mutate(segment = as.numeric(str_extract(var, "(?<=\\[)\\d+")))
+df_u90 <- df_u90 %>%  mutate(tipo_acc = as.numeric(stringr::str_extract(var, "(?<=, )\\d+")))
+
+lines_df90 <- lines_df %>% left_join(df_u90, by = "segment")
+sum(lines_df90$tipo_acc == 6, na.rm = TRUE) #2506/3488
+
+```
+
+Y lo mismo pero con 99% confianza
+
+```{r}
+#99%
+
+#Calcualar el intervalo de confianza del 99%
+interval_99 <- apply(mcmc.output[["samples"]][["chain1"]], 2, function(x) quantile(x, probs = c(0.005, 0.995)))
+interval_99_df <- as.data.frame(t(interval_99))
+colnames(interval_99_df) <- c("99%CI_low", "99%CI_upp")
+
+#Vemos que efectos aleatorios son significativos
+mcmc_99 <- rownames_to_column(interval_99_df, var = "var") 
+df_u99 <- mcmc_99 %>% filter(grepl("^u", var)) %>% filter((.[[2]] > 0 ) | .[[3]] < 0)
+
+#Indicamos a que segmentos corresponden
+df_u99 <- df_u99 %>%  mutate(segment = as.numeric(str_extract(var, "(?<=\\[)\\d+")))
+df_u99 <- df_u99 %>%  mutate(tipo_acc = as.numeric(stringr::str_extract(var, "(?<=, )\\d+")))
+
+lines_df99 <- lines_df %>% left_join(df_u99, by = "segment")
+sum(lines_df99$tipo_acc == 6, na.rm = TRUE) #1653/1655
+```
+
+Representamos los segmentos con efectos aleatorios significativos para los distintos niveles de confianza
+
+```{r}
+
+lines90 <- lines_df90 %>% filter(tipo_acc != 6) %>% mutate(categoria_color = ifelse(!is.na(var) , "red", "grey60"))
+lines95 <- lines_df95 %>% filter(tipo_acc != 6) %>% mutate(categoria_color = ifelse(!is.na(var) , "red", "grey60"))
+lines99 <- lines_df99 %>% filter(tipo_acc != 6) %>% mutate(categoria_color = ifelse(!is.na(var) , "red", "grey60"))
+
+confianza = list(lines90,lines95,lines99)
+nivel <- c("90", "95", "99")
+
+for (i in seq_along(confianza)) {
+  u <-  ggplot(confianza[[i]]) +
+        geom_sf(data = valencia_map$osm_lines, color = "gray90", size = 0.1) +      #mapa extendido fondo
+        geom_segment(aes(x = x0, y = y0, xend = x1, yend = y1, color = categoria_color), size = 0.8) +  #segmentos X$domain 
+        scale_color_identity(name = "Tipo de accidente") +                        
+        coord_sf(xlim = c(723447.4, 727762.5), ylim = c(4370566, 4374681), crs = 25830) +
+        labs(title = paste("Efecto espacial significativo con",nivel[[i]],"% de confianza"))+
+        theme_minimal() +
+        theme_void() +
+        theme(legend.position = "none")  
+  print(u)
+}
+ 
+```
+
+5. Segmentos con Efectos Aleatorios Significativos con un 90%, 95% y 99% de Confianza
+
+Confianza del 90%, 95% y 99% 
+```{r}
+#95% 
+
+#Vemos que efectos aleatorios son significativos
+mcmc_v95 <- rownames_to_column(as.data.frame(mcmc.output[["summary"]][["chain1"]]), var = "var") 
+df_v95 <- mcmc_v95 %>% filter(grepl("^v", var)) %>% select(1,5,6) %>% filter((.[[2]] > 0 ) | .[[3]] < 0) #2657
+
+# de estos 2657 cuantos son del tipo 6?
+
+df_v95 <- df_v95 %>%  mutate(segment = as.numeric(str_extract(var, "(?<=\\[)\\d+"))) #segmento
+df_v95 <- df_v95 %>%  mutate(tipo_acc = as.numeric(stringr::str_extract(var, "(?<=, )\\d+"))) #tipo accidente
+lines_v95 <- lines_df %>% left_join(df_v95, by = "segment")
+
+
+```
+
+Hacemos lo mismo pero indicamos aquellos que sean positivos o negativos con un 90% de confianza
+```{r}
+#90%
+
+# Calcualar el intervalo de confianza del 90%
+interval_v90 <- apply(mcmc.output[["samples"]][["chain1"]], 2, function(x) quantile(x, probs = c(0.05, 0.95)))
+interval_v90_df <- as.data.frame(t(interval_v90))
+colnames(interval_v90_df) <- c("90%CI_low", "90%CI_upp")
+
+# Efectos aleatorios significativos
+mcmc_v90 <- rownames_to_column(interval_v90_df, var = "var") 
+df_v90 <- mcmc_v90 %>% filter(grepl("^v", var)) %>% filter((.[[2]] > 0 ) | .[[3]] < 0)
+# Indicamos a que segmentos corresponden
+df_v90 <- df_v90 %>%  mutate(segment = as.numeric(str_extract(var, "(?<=\\[)\\d+")))
+df_v90 <- df_v90 %>%  mutate(tipo_acc = as.numeric(stringr::str_extract(var, "(?<=, )\\d+")))
+
+lines_v90 <- lines_df %>% left_join(df_v90, by = "segment")
+
+```
+
+Y lo mismo pero con 99% confianza
+
+```{r}
+#99%
+
+#Calcualar el intervalo de confianza del 99%
+interval_v99 <- apply(mcmc.output[["samples"]][["chain1"]], 2, function(x) quantile(x, probs = c(0.005, 0.995)))
+interval_v99_df <- as.data.frame(t(interval_v99))
+colnames(interval_v99_df) <- c("99%CI_low", "99%CI_upp")
+
+#Vemos que efectos aleatorios son significativos
+mcmc_v99 <- rownames_to_column(interval_v99_df, var = "var") 
+df_v99 <- mcmc_v99 %>% filter(grepl("^v", var)) %>% filter((.[[2]] > 0 ) | .[[3]] < 0)
+
+#Indicamos a que segmentos corresponden
+df_v99 <- df_v99 %>%  mutate(segment = as.numeric(str_extract(var, "(?<=\\[)\\d+")))
+df_v99 <- df_v99 %>%  mutate(tipo_acc = as.numeric(stringr::str_extract(var, "(?<=, )\\d+")))
+
+lines_v99 <- lines_df %>% left_join(df_v99, by = "segment")
+
+```
+
+Representamos los segmentos con efectos aleatorios significativos para los distintos niveles de confianza
+
+```{r}
+
+lines90 <- lines_v90 %>% mutate(categoria_color = ifelse(!is.na(var) , "red", "grey80"))
+lines95 <- lines_v95 %>% mutate(categoria_color = ifelse(!is.na(var) , "red", "grey80"))
+lines99 <- lines_v99 %>% mutate(categoria_color = ifelse(!is.na(var) , "red", "grey80"))
+
+confianza = list(lines90,lines95,lines99)
+nivel <- c("90", "95", "99")
+
+
+for (i in seq_along(confianza)) {
+  u <-  ggplot(confianza[[i]]) +
+       # geom_sf(data = valencia_map$osm_lines, color = "gray90", size = 0.1) +      #mapa extendido fondo
+        geom_segment(aes(x = x0, y = y0, xend = x1, yend = y1, color = categoria_color), size = 0.8) +  #segmentos X$domain 
+        scale_color_identity(name = "Tipo de accidente") +                        
+        coord_sf(xlim = c(723447.4, 727762.5), ylim = c(4370566, 4374681), crs = 25830) +
+        #labs(title = paste("Efecto aleatorio significativo con",nivel[[i]],"% de confianza"))+
+        theme_minimal() +
+        theme_void() +
+        theme(legend.position = "none")  
+  print(u)
+}
+```
+
+6. Probabilidad de que cada segmento supere la probabilidad media estimada para cada tipo de accidente
+
+```{r}
+#Calcular medias de cada tipo de accidente
+c1=mean(pi_1$Mean); c2=mean(pi_2$Mean); c3=mean(pi_3$Mean); c4=mean(pi_4$Mean); c5=mean(pi_5$Mean); c6=mean(pi_6$Mean)
+```
+
+```{r}
+#Cálculo de probabilidad para cada segmento
+acc1 <- t(as.data.frame(mcmc.output[["samples"]][["chain1"]]) %>% select(matches("^pi\\[.*, 1\\]$")))
+prob1 <- as.data.frame(apply(acc1, 1, function(x) mean(x > c1))) %>% setNames("prob")
+
+acc2 <- t(as.data.frame(mcmc.output[["samples"]][["chain1"]]) %>% select(matches("^pi\\[.*, 2\\]$")))
+prob2 <- as.data.frame(apply(acc2, 1, function(x) mean(x > c2))) %>% setNames("prob")
+
+acc3 <- t(as.data.frame(mcmc.output[["samples"]][["chain1"]]) %>% select(matches("^pi\\[.*, 3\\]$")))
+prob3 <- as.data.frame(apply(acc3, 1, function(x) mean(x > c3))) %>% setNames("prob")
+
+acc4 <- t(as.data.frame(mcmc.output[["samples"]][["chain1"]]) %>% select(matches("^pi\\[.*, 4\\]$")))
+prob4 <- as.data.frame(apply(acc4, 1, function(x) mean(x > c4))) %>% setNames("prob")
+
+acc5 <- t(as.data.frame(mcmc.output[["samples"]][["chain1"]]) %>% select(matches("^pi\\[.*, 5\\]$")))
+prob5 <- as.data.frame(apply(acc5, 1, function(x) mean(x > c5))) %>% setNames("prob")
+
+acc6 <- t(as.data.frame(mcmc.output[["samples"]][["chain1"]]) %>% select(matches("^pi\\[.*, 6\\]$")))
+prob6 <- as.data.frame(apply(acc6, 1, function(x) mean(x > c6))) %>% setNames("prob")
+
+lines_prob<-cbind(lines_df, prob1=prob1$prob, prob2=prob2$prob, prob3=prob3$prob, prob4=prob4$prob, prob5=prob5$prob, prob6=prob6$prob)
+```
+
+
+```{r}
+# Gráfico
+prob_col <-  c("prob1", "prob2", "prob3", "prob4", "prob5", "prob6")
+tipos_accidente <- c("ALCANCE", "ATROPELLO", "CHOQUE", "EMBESTIDA", "RASCADA", "SALIDA VIA")
+
+for (i in seq_along(prob_col)) {
+  
+  prob_column <- prob_col[i]
+  tipo_accidente <- tipos_accidente[i]
+  
+  min_prob <- min(lines_prob[[prob_column]],  na.rm = TRUE)
+  max_prob <- max(lines_prob[[prob_column]], na.rm = TRUE)
+
+  p<- ggplot(lines_prob) +
+      geom_sf(data = valencia_map$osm_lines, color = "gray90", size = 0.3) + 
+      geom_segment(aes(x = x0, y = y0, xend = x1, yend = y1, color = !!sym(prob_column)), size = 0.8) +
+      scale_color_viridis_c(name = "Probabilidad", option = "H", limits = c(min_prob, max_prob)) +  
+      coord_sf(xlim = c(723447.4, 727762.5), ylim = c(4370566, 4374681), crs = 25830) +
+      annotation_north_arrow(location = "tl", which_north = "true") +
+      labs(title = "Red Vial de Valencia",
+           subtitle = paste("Segmentos coloreados por probabilidad de accidente:", tipo_accidente),
+           color = "Probabilidad") +
+      theme_minimal() +
+      theme_void() +
+      theme(legend.position = "right")
+  
+  print(p)
+}
+
+```
+
+

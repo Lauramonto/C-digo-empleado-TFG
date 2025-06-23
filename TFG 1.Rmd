@@ -1,0 +1,268 @@
+---
+title: "TFG"
+output: html_document
+date: "2024-09-17"
+---
+
+LIBRERÍAS
+```{r, warning=FALSE}
+library(spatstat)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(nnet)
+library(car)
+library(ggcorrplot)
+library(DRHotNet)
+library(nnet)
+```
+
+# Loading accident data
+
+```{r}
+setwd("G:/Mi unidad/Investigacion/CompositionalAccidents/")
+load("Data/X_2014_2017.rda")
+```
+
+```{r}
+setwd("C:/Users/Usuario/OneDrive/Documentos/TFG")
+load("Data/X_2014_2017.rda")
+```
+
+
+# Extract data for analysis
+
+```{r}
+data_analysis = as.data.frame(X$data)
+data_analysis = data_analysis[,-ncol(data_analysis)] # remove final column (duplicated)
+head(data_analysis)
+
+
+
+```
+
+# Plot Valencia network for analysis
+```{r}
+plot(X$domain)
+str(X$domain)
+```
+# Segment-level data base 
+
+```{r}
+
+levels(data_analysis$CAUSA)
+# Count number of accidents per segment and cause
+causa <- data_analysis %>%
+         filter(CAUSA != "OTROS") %>%
+         group_by(seg, CAUSA) %>%
+         summarise(num_accidentes = n(), .groups = 'drop') %>%
+         group_by(seg) %>%
+         mutate(TOTAL_ACCIDENTES = sum(num_accidentes, na.rm = TRUE)) %>%
+         ungroup()
+        # Transform data into the rigth data base format
+BD_causa <- causa %>%
+            pivot_wider( names_from = CAUSA,
+                         values_from = num_accidentes,
+                         values_fill = list(num_accidentes = 0) )
+
+BD_causa
+
+# Count number of vehicles involved in each segment
+BD_vehiculo <- data_analysis %>%
+               filter(CAUSA != "OTROS") %>%
+               group_by(seg) %>%
+               summarise( TOTAL_VEHICULOS = sum(AUTOBUS_SI + BICICLETA_SI + CAMION_SI + EMT_SI + FURGONETA_SI+   
+                          MOTOCICLETA_SI + TURISMO_SI, na.rm = TRUE),
+                          AUTOBUS = sum(AUTOBUS_SI, na.rm = TRUE),
+                          BICICLETA = sum(BICICLETA_SI, na.rm = TRUE),
+                          CAMION = sum(CAMION_SI, na.rm = TRUE),
+                          EMT = sum(EMT_SI, na.rm = TRUE),
+                          FURGONETA = sum(FURGONETA_SI, na.rm = TRUE),
+                          MOTOCICLETA = sum(MOTOCICLETA_SI, na.rm = TRUE),
+                          TURISMO = sum(TURISMO_SI, na.rm = TRUE))
+    
+# Merging the two tables
+BD <- BD_causa %>%
+  right_join(BD_vehiculo, by = "seg")
+
+#Adding 0s
+all_segments <- data.frame(seg = 1:X$domain$lines$n)
+BD <- merge(all_segments, BD, by = "seg", all.x = TRUE)
+BD[is.na(BD)] <- 0
+BD[is.na(BD)]
+BD <- BD[order(BD$seg), ]
+save(BD,file = "Data/BD.rda")
+sum(!is.na(BD$TOTAL_ACCIDENTES))
+mean(BD$TOTAL_ACCIDENTES, na.rm = TRUE)
+
+
+```
+
+
+```{r}
+#summary
+tipo_accidente <- BD %>%
+  summarise(
+    ALCANCE = sum(ALCANCE, na.rm = TRUE),
+    EMBESTIDA = sum(EMBESTIDA, na.rm = TRUE),
+    ATROPELLO = sum(ATROPELLO, na.rm = TRUE),
+    CAIDA = sum(CAIDA, na.rm = TRUE),
+    CHOQUE = sum(CHOQUE, na.rm = TRUE),
+    RASCADA = sum(RASCADA, na.rm = TRUE),
+    SALIDA_DE_LA_VIA = sum(`SALIDA DE LA VIA`, na.rm = TRUE),
+    TOTAL = sum(TOTAL_ACCIDENTES, na.rm = TRUE)
+  )
+
+tipo_accidente
+
+# nrow(data_analysis%>%filter(CAUSA != "OTROS")) 9952
+
+```
+```{r}
+library(ggplot2)
+
+# Datos
+tipo_accidente <- data.frame(
+  tipo = c("Embestida", "Alcance", "Choque", "Rascada", "Atropello", "Salida de la vía"),
+  cantidad = c(3082, 2691, 1518, 1314, 701, 198)
+)
+
+# Gráfico de barras horizontales
+ggplot(tipo_accidente, aes(x = cantidad, y = reorder(tipo, cantidad))) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  labs(x = "Número de accidentes", y = NULL, title = "Distribución por tipo de accidente") +
+  theme_minimal(base_size = 11) +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    axis.text = element_text(color = "black")
+  )
+
+# Guardar como imagen para Overleaf
+ggsave("tipo_accidente_barras.png", width = 6, height = 4, dpi = 300)
+
+```
+
+
+# Data cleaning
+
+```{r}
+
+data_analysis %>% filter(if_any(!c(HERIDOS, MUERTOS), is.na))
+
+accidentes <- data_analysis %>%
+  mutate(
+    HORA.FINAL = ifelse(is.na(HORA.FINAL), median(HORA.FINAL, na.rm = TRUE), HORA.FINAL),
+    MUERTOS = ifelse(is.na(MUERTOS), 0, MUERTOS),
+    HERIDOS = ifelse(is.na(HERIDOS), 0, HERIDOS)
+  )
+
+accidentes$DATES = as.Date(accidentes$DATES)
+accidentes$DIA.SEMANA <- iconv(accidentes$DIA.SEMANA, from = "latin1", to = "UTF-8")
+```
+
+
+```{r}
+
+levels(accidentes$CAUSA)
+
+accidentes <- accidentes %>% 
+  filter(CAUSA %in% c("ALCANCE", "EMBESTIDA", "ATROPELLO", "CAIDA", "CHOQUE", "RASCADA", "SALIDA DE LA VIA"))
+
+unique(accidentes$CAUSA)
+
+accidentes$CAUSA <- droplevels(accidentes$CAUSA)
+
+levels(accidentes$CAUSA)
+```
+
+ 
+# Multinomial model
+
+```{r}
+
+#intercepto aleatorio por segmento y dia
+
+#modelo
+modelo1 <- multinom(CAUSA ~  MES + DIA.SEMANA+ HORA.FINAL + HERIDOS_MUERTOS+
+                                AUTOBUS_SI + BICICLETA_SI + CAMION_SI + 
+                                EMT_SI + FURGONETA_SI + MOTOCICLETA_SI + 
+                                TURISMO_SI, data = accidentes)
+
+Anova(modelo1, type = "II")  # Mes y dia semana no significativas
+
+vif(modelo1) #turismo_si alta colinealidad
+
+
+correlation_matrix <- cor(accidentes[, c("HERIDOS_MUERTOS", 
+                                          "AUTOBUS_SI", "BICICLETA_SI", "CAMION_SI", 
+                                          "EMT_SI", "FURGONETA_SI", "MOTOCICLETA_SI", 
+                                          "TURISMO_SI")], use = "pairwise.complete.obs")
+
+ggcorrplot(correlation_matrix, method = "circle", lab = TRUE)
+
+modelo2 <- multinom(CAUSA ~  HORA.FINAL + HERIDOS_MUERTOS+
+                                AUTOBUS_SI + BICICLETA_SI + CAMION_SI + 
+                                EMT_SI + FURGONETA_SI + MOTOCICLETA_SI + 
+                                TURISMO_SI, data = accidentes)
+
+
+AIC(modelo1)
+AIC(modelo2)
+
+
+```
+```{r}
+~
+# test and training data
+  
+set.seed(123) 
+train_index <- sample(1:nrow(accidentes), 0.7 * nrow(accidentes))
+train_data <- accidentes[train_index, ]
+test_data <- accidentes[-train_index, ]
+
+
+modelo_final_train <- modelo2 <- multinom(CAUSA ~ HORA.FINAL + HERIDOS_MUERTOS+
+                                AUTOBUS_SI + BICICLETA_SI + CAMION_SI + 
+                                EMT_SI + FURGONETA_SI + MOTOCICLETA_SI + 
+                                TURISMO_SI, data = train_data)
+
+predicciones <- predict(modelo_final_train, newdata = test_data)
+
+matriz_confusion <- table(predicciones, test_data$CAUSA)
+
+precision <- sum(diag(matriz_confusion)) / sum(matriz_confusion)
+print(paste("Precisión del modelo:", round(precision, 4)))
+```
+```{r}
+cov_segs <- covariables_segs %>% select(Densitat.Població, Educació.Obligatòria, Zones.Verdes, Turismes.de.16.CV.i.més)
+head(cov_segs)
+```
+
+
+
+```{r}
+
+options(scipen = 999) 
+
+predicciones <- predict(modelo2, newdata = accidentes, type = "probs")
+
+resultados <- cbind(accidentes$seg, predicciones)
+
+resultados <- as.data.frame(resultados)
+
+resultados_agrupados <- aggregate(. ~ V1, data = resultados, FUN = mean)
+
+resultados_porcentaje <- resultados_agrupados %>%
+  mutate(across(2:8, ~ .x * 100))
+
+resultados_porcentaje[2:8] <- round(resultados_porcentaje[2:8], 4)
+
+resultados_porcentaje
+
+```
+
+
+
+
+
+
