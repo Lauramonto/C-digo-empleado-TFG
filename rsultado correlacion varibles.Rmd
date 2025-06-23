@@ -1,0 +1,67 @@
+---
+title: "Untitled"
+output: html_document
+date: "2025-03-20"
+---
+```{r}
+library(ggplot2)
+library(corrplot)
+library(dplyr)
+library(readr)
+```
+
+
+
+```{r}
+# Cargar los datos
+load("BD.rda")
+load("covariables_segs.rda")
+```
+
+
+
+
+```{r}
+covariables_segs[] <- lapply(covariables_segs, function(x) as.numeric(as.character(x)))
+cov_scaled <- scale(covariables_segs[, -ncol(covariables_segs)])  # Excluye ID si es la última
+
+```
+
+
+```{r}
+# Selecciona las variables respuesta
+Y <- BD[, c("ALCANCE", "ATROPELLO", "CHOQUE", "EMBESTIDA", "RASCADA", "SALIDA.DE.LA.VIA")]
+
+# Calcula la matriz de correlación entre cada covariable y cada tipo de accidente
+cor_matrix <- cor(cov_scaled, Y, use = "pairwise.complete.obs")
+
+```
+
+
+```{r}
+# Tomar las 10 covariables con mayor correlación absoluta por tipo
+top_vars_list <- apply(abs(cor_matrix), 2, function(x) names(sort(x, decreasing = TRUE)[1:10]))
+
+# Mostrar las seleccionadas
+top_vars_list
+
+```
+```{r}
+# Crear un vector único de nombres de covariables seleccionadas
+vars_finales <- unique(as.vector(top_vars_list))
+vars_finales
+
+# Filtrar el dataframe original
+cov_reducidas <- covariables_segs[, vars_finales]
+
+# Escalar de nuevo
+cov_reducidas_scaled <- scale(cov_reducidas)
+
+save(cov_reducidas_scaled, file = "cov_reducidas_scaled.rda")
+
+```
+
+
+
+
+
