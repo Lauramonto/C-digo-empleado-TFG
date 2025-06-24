@@ -1,0 +1,60 @@
+---
+title: "Untitled"
+output: html_document
+date: "2025-06-21"
+---
+
+
+```{r}
+library(dplyr)
+library(stringr)
+
+df_calles <- as.data.frame(X$data)
+str(df_calles)
+```
+```{r}
+
+df <- as.data.frame(mcmc.output[["summary"]][["chain1"]]) 
+df <- rownames_to_column(df, var = "segment") 
+df_pi <- df %>% filter(grepl("^pi", segment)) %>% select("segment", "Mean")
+
+```
+
+
+```{r}
+# Extraemos los pi y los índices de segmento y tipo
+df_pi <- df %>% 
+  filter(grepl("^pi", segment)) %>% 
+  select(segment, Mean) %>%
+  mutate(
+    seg_num = as.numeric(str_extract(segment, "(?<=\\[)\\d+")),
+    tipo = as.numeric(str_extract(segment, "(?<=, )\\d+"))
+  )
+
+# Preparamos df_calles eliminando duplicados: un solo nombre por segmento
+df_calles_unique <- df_calles %>%
+  group_by(seg) %>%
+  slice(1) %>%
+  ungroup()
+
+# Función para obtener el top 10 por tipo
+get_top10 <- function(df_pi, tipo_num) {
+  df_pi %>%
+    filter(tipo == tipo_num) %>%
+    arrange(desc(Mean)) %>%
+    slice_head(n = 10) %>%
+    left_join(df_calles_unique, by = c("seg_num" = "seg")) %>%
+    select(seg_num, DIRLITERAL, Mean)
+}
+
+#top 10 de cada tipo
+top10_alcance <- get_top10(df_pi, 1)
+top10_atropello <- get_top10(df_pi, 2)
+top10_choque <- get_top10(df_pi, 3)
+top10_embestida <- get_top10(df_pi, 4)
+top10_rascada <- get_top10(df_pi, 5)
+top10_salida_via <- get_top10(df_pi, 6)
+
+top10_rascada
+```
+
